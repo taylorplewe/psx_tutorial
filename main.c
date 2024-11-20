@@ -5,6 +5,7 @@
 #include <psxgpu.h>
 #include <psxapi.h>
 #include <psxpad.h>
+
 #define OTLEN 8
 #define BOX_SIZE 64
 #define SCRN_WIDTH 320
@@ -45,6 +46,8 @@ extern const uint32_t garden64_1_tim[];
 u_char padbuff[2][34];
 PADTYPE padinfo;
 
+void ship_init();
+void ship_update();
 void loadTexture(const uint32_t* tim, TIM_IMAGE* tparam) {
 	GetTimInfo(tim, tparam);
 	LoadImage(tparam->prect, tparam->paddr);
@@ -111,6 +114,7 @@ void init() {
 	db = 0;
 	
 	initBoxes();
+	ship_init();
 }
 
 void getInput() {
@@ -195,8 +199,97 @@ int main() {
 		addPrim( ot[db], tpri );
 		nextprim += sizeof(DR_TPAGE);
 
+		ship_update();
+
 		display();
 	}
 
 	return 0;
 }
+
+
+/// Fixed-point arithmetic (ship)
+#define mul_frac(val, frac) (val*frac)>>12
+#define div_frac(val, div) (val*ONE)/div
+
+uint32_t ship_x, ship_y;
+uint32_t ship_velox, ship_veloy;
+int ship_angle;
+SVECTOR ship_triangle[] = {
+	{  0, -20, 0},
+	{ 10,  20, 0},
+	{-10,  20, 0}
+};
+void ship_init() {
+	ship_x = ONE*(disp[0].disp.w>>1);
+	ship_y = ONE*(disp[0].disp.h>>1);
+	ship_angle = 0;
+}
+void ship_control() {
+	if (!(padinfo.btn & PAD_UP)) {
+		ship_velox += (isin(ship_angle))/128;
+		ship_veloy -= (icos(ship_angle))/128;
+	} else if (!(padinfo.btn & PAD_DOWN)) {
+		ship_velox -= (isin(ship_angle))/64;
+		ship_veloy += (icos(ship_angle))/64;
+	}
+	if (!(padinfo.btn & PAD_LEFT)) {
+		ship_angle -= 10;
+	} else if (!(padinfo.btn & PAD_RIGHT)) {
+		ship_angle += 10;
+	}
+}
+void ship_move() {
+	ship_x += ship_velox;
+	ship_y += ship_veloy;
+	if (ship_x > ONE*disp[0].disp.w) {
+		ship_velox *= -1;
+	} else if (ship_x < 0) {
+		ship_velox *= -1;
+	}
+	if (ship_y > ONE*disp[0].disp.h) {
+		ship_veloy *= -1;
+	} else if (ship_y < 0) {
+		ship_veloy *= -1;
+	}
+}
+void ship_update() {
+	SVECTOR v[3];
+	POLY_F3* tri;
+
+	ship_control();
+	ship_move();
+
+	// rotate ship based on angle
+	for (int i = 0; i < 3; i++) {
+		v[i].vx = (
+			(
+				(
+					ship_triangle[i].vx * icos(ship_angle)
+				) - (
+					ship_triangle[i].vy * isin(ship_angle)
+				)
+			) >> 12
+		) + (ship_x >> 12);
+		v[i].vy = (
+			(
+				(
+					ship_triangle[i].vy * icos(ship_angle)
+				) + (
+					ship_triangle[i].vx * isin(ship_angle)
+				)
+			) >> 12
+		) + (ship_y >> 12);
+	}
+	tri = (POLY_F3*)nextprim;
+	setPolyF3(tri);
+	setRGB0(tri, 0xff, 0xff, 0xff);
+	setXY3(tri,
+		v[0].vx, v[0].vy,
+		v[1].vx, v[1].vy,
+		v[2].vx, v[2].vy
+	);
+	addPrim(ot[db], tri);
+	nextprim += sizeof(POLY_F3);
+}
+///
